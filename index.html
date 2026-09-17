@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BookRadar — Polymarket arbitrage book scanner</title>
+<meta name="description" content="Live scanner for Polymarket mutually-exclusive event books where buying every outcome pays more than it costs. Free, no signup.">
+<style>
+:root{--bg:#0d1117;--card:#161b22;--fg:#e6edf3;--mut:#8b949e;--green:#3fb950;--red:#f85149;--border:#30363d}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.55 system-ui,sans-serif;padding:24px}
+.wrap{max-width:1000px;margin:0 auto}
+h1{font-size:26px;margin:0 0 4px}
+.sub{color:var(--mut);margin-bottom:16px}
+.card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:16px;margin-bottom:16px}
+button{background:#238636;color:#fff;border:0;border-radius:8px;padding:10px 18px;font-size:15px;cursor:pointer}
+button:disabled{opacity:.5;cursor:wait}
+table{width:100%;border-collapse:collapse}
+th,td{padding:7px 9px;text-align:right;border-bottom:1px solid var(--border);font-variant-numeric:tabular-nums}
+th:first-child,td:first-child,th:nth-child(2),td:nth-child(2){text-align:left}
+th{color:var(--mut);font-weight:600;font-size:13px}
+.g{color:var(--green);font-weight:700}.r{color:var(--red)}.m{color:var(--mut)}
+.note{color:var(--mut);font-size:13px}
+#status{margin-left:12px;color:var(--mut)}
+footer{color:var(--mut);font-size:12px;margin-top:22px}
+a{color:#58a6ff}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>BookRadar</h1>
+  <div class="sub">Scans Polymarket's mutually-exclusive ("negRisk") event books in your browser. If buying <em>every</em> outcome costs under $1.00 total, one of them must pay $1.00 — that gap is arbitrage. No signup.</div>
+  <div class="card">
+    <button id="go">Scan books</button><span id="status"></span>
+    <p class="note"><strong>YES-set cost</strong> = buy one share of every outcome (sum of asks) → pays exactly $1 when any leg resolves. <strong>NO edge</strong> = profit per $1 stake from buying every NO instead. Negative means the book is already overpriced (arb is the other direction). Filter: events with ≥$5k volume in 24h, sorted closest to free money.</p>
+    <table id="t">
+      <thead><tr><th>Event</th><th>Category</th><th>Legs</th><th>Vol 24h</th><th>YES-set cost</th><th>NO edge</th></tr></thead>
+      <tbody><tr><td colspan="6" class="m">press "Scan books" — fetches ~300 events across 3 pings</td></tr></tbody>
+    </table>
+    <div class="note" id="err"></div>
+  </div>
+  <div class="card note">
+    Data: Polymarket public Gamma API, fetched from your browser, refreshed on click. Bots patrol liquid books — a 0.5–1¢ gap on a short-dated book is normal, a 3¢+ gap usually means thin legs or a rule mismatch. Check resolution rules before believing any free lunch. Not financial advice. Built by <a href="https://github.com/opticblu">opticblu</a>.
+    <br><br><em>Partner links may appear here — they fund the free data.</em>
+  </div>
+  <footer>BookRadar · last scan <span id="ts">never</span></footer>
+</div>
+<script>
+const $=s=>document.querySelector(s);
+const tbody=$("#t tbody");
+$("#go").onclick=async()=>{
+  $("#go").disabled=true; $("#status").textContent="scanning…"; rows=[];
+  try{
+    for(const off of [0,100,200]){
+      const ev=await fetch(`https://gamma-api.polymarket.com/events?closed=false&limit=100&offset=${off}&order=volume24hr&ascending=false`).then(x=>x.json());
+      for(const e of ev){
+        if(!e.negRisk) continue;
+        let ms=[];
+        try{ ms=(e.markets||[]).filter(m=>{
+          const b=m.bestBid!=null&&m.bestBid!==""&&m.bestAsk!=null&&m.bestAsk!=="";
+          let o=[]; try{o=JSON.parse(m.outcomes||"[]")}catch(_){}
+          return b && o.length===2 && o[0]==="Yes";
+        }); }catch(_){ continue; }
+        if(ms.length<3) continue;
+        const v=parseFloat(e.volume24hr||e.volume||"0")||0;
+        if(v<5000) continue;
+        let yc=0, nb=0;
+        for(const m of ms){ yc+=parseFloat(m.bestAsk); nb+=parseFloat(m.bestBid); }
+        rows.push({t:e.title||"",c:(e.category||e.series?.slug||"—"),n:ms.length,v,yc,no:nb-1});
+      }
+    }
+    rows.sort((a,b)=>Math.abs(a.yc-1)-Math.abs(b.yc-1));
+    tbody.innerHTML=rows.map(r=>{
+      const yc=r.yc<0.995?`<span class="g">$${r.yc.toFixed(3)}</span>`:r.yc>1.005?`<span class="r">$${r.yc.toFixed(3)}</span>`:`$${r.yc.toFixed(3)}`;
+      const no=r.no>0.005?`<span class="g">+${r.no.toFixed(3)}</span>`:`${r.no.toFixed(3)}`;
+      return `<tr><td title="${r.t}">${r.t.slice(0,54)}</td><td class="m">${r.c.slice(0,16)}</td><td>${r.n}</td><td>$${r.v.toLocaleString(undefined,{maximumFractionDigits:0})}</td><td>${yc}</td><td>${no}</td></tr>`;
+    }).join("")||`<tr><td colspan="6" class="m">no qualifying books this cycle</td></tr>`;
+    $("#ts").textContent=new Date().toISOString().slice(11,19)+" UTC";
+    $("#status").textContent=`${rows.length} books`;
+  }catch(e){ $("#err").textContent="feed failed: "+e; }
+  $("#go").disabled=false;
+};
+</script>
+</body>
+</html>
