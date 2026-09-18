@@ -55,24 +55,26 @@ $("#go").onclick=async()=>{
       const ev=await fetch(`https://gamma-api.polymarket.com/events?closed=false&limit=100&offset=${off}&order=volume24hr&ascending=false`).then(x=>x.json());
       for(const e of ev){
         if(!e.negRisk) continue;
-        let ms=[];
-        try{ ms=(e.markets||[]).filter(m=>{
-          const b=m.bestBid!=null&&m.bestBid!==""&&m.bestAsk!=null&&m.bestAsk!=="";
+        let ms=(e.markets||[]).filter(m=>{
           let o=[]; try{o=JSON.parse(m.outcomes||"[]")}catch(_){}
-          return b && o.length===2 && o[0]==="Yes";
-        }); }catch(_){ continue; }
+          return o.length===2 && o[0]==="Yes";
+        });
         if(ms.length<3) continue;
         const v=parseFloat(e.volume24hr||e.volume||"0")||0;
         if(v<5000) continue;
-        let yc=0, nb=0;
-        for(const m of ms){ yc+=parseFloat(m.bestAsk); nb+=parseFloat(m.bestBid); }
-        rows.push({t:e.title||"",c:(e.category||e.series?.slug||"—"),n:ms.length,v,yc,no:nb-1});
+        // YES-set arb needs an ask on EVERY leg; NO edge needs a bid on every leg.
+        const allAsk = ms.every(m=>m.bestAsk!=null && m.bestAsk!=="");
+        const allBid = ms.every(m=>m.bestBid!=null && m.bestBid!=="");
+        if(!allAsk && !allBid) continue;
+        let yc = allAsk ? ms.reduce((s,m)=>s+parseFloat(m.bestAsk),0) : null;
+        let nb = allBid ? ms.reduce((s,m)=>s+parseFloat(m.bestBid),0)-1 : null;
+        rows.push({t:e.title||"",c:(e.category||(e.series&&e.series.slug)||"—"),n:ms.length,v,yc,no:nb});
       }
     }
     rows.sort((a,b)=>Math.abs(a.yc-1)-Math.abs(b.yc-1));
     tbody.innerHTML=rows.map(r=>{
-      const yc=r.yc<0.995?`<span class="g">$${r.yc.toFixed(3)}</span>`:r.yc>1.005?`<span class="r">$${r.yc.toFixed(3)}</span>`:`$${r.yc.toFixed(3)}`;
-      const no=r.no>0.005?`<span class="g">+${r.no.toFixed(3)}</span>`:`${r.no.toFixed(3)}`;
+      const yc=r.yc==null?`<span class="m">n/a</span>`:r.yc<0.995?`<span class="g">$${r.yc.toFixed(3)}</span>`:r.yc>1.005?`<span class="r">$${r.yc.toFixed(3)}</span>`:`$${r.yc.toFixed(3)}`;
+      const no=r.no==null?`<span class="m">n/a</span>`:r.no>0.005?`<span class="g">+${r.no.toFixed(3)}</span>`:`${r.no.toFixed(3)}`;
       return `<tr><td title="${r.t}">${r.t.slice(0,54)}</td><td class="m">${r.c.slice(0,16)}</td><td>${r.n}</td><td>$${r.v.toLocaleString(undefined,{maximumFractionDigits:0})}</td><td>${yc}</td><td>${no}</td></tr>`;
     }).join("")||`<tr><td colspan="6" class="m">no qualifying books this cycle</td></tr>`;
     $("#ts").textContent=new Date().toISOString().slice(11,19)+" UTC";
