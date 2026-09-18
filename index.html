@@ -34,8 +34,8 @@ a{color:#58a6ff}
     <button id="go">Scan books</button><span id="status"></span>
     <p class="note"><strong>YES-set cost</strong> = buy one share of every outcome (sum of asks) → pays exactly $1 when any leg resolves. <strong>NO edge</strong> = profit per $1 stake from buying every NO instead. Negative means the book is already overpriced (arb is the other direction). Filter: events with ≥$5k volume in 24h, sorted closest to free money.</p>
     <table id="t">
-      <thead><tr><th>Event</th><th>Category</th><th>Legs</th><th>Vol 24h</th><th>YES-set cost</th><th>NO edge</th></tr></thead>
-      <tbody><tr><td colspan="6" class="m">press "Scan books" — fetches ~300 events across 3 pings</td></tr></tbody>
+      <thead><tr><th>Event</th><th>Category</th><th>Legs</th><th>Vol 24h</th><th>YES-set cost</th><th>NO edge</th><th>Depth check (~$500)</th></tr></thead>
+      <tbody><tr><td colspan="7" class="m">press "Scan books" — fetches ~300 events across 3 pings</td></tr></tbody>
     </table>
     <div class="note" id="err"></div>
   </div>
@@ -68,15 +68,38 @@ $("#go").onclick=async()=>{
         if(!allAsk && !allBid) continue;
         let yc = allAsk ? ms.reduce((s,m)=>s+parseFloat(m.bestAsk),0) : null;
         let nb = allBid ? ms.reduce((s,m)=>s+parseFloat(m.bestBid),0)-1 : null;
-        rows.push({t:e.title||"",c:(e.category||(e.series&&e.series.slug)||"—"),n:ms.length,v,yc,no:nb});
+        rows.push({t:e.title||"",c:(e.category||(e.series&&e.series.slug)||"—"),n:ms.length,v,yc,no:nb,ids:ms.map(m=>{try{return JSON.parse(m.clobTokenIds)[0]}catch(_){return null}})});
       }
     }
     rows.sort((a,b)=>Math.abs(a.yc-1)-Math.abs(b.yc-1));
-    tbody.innerHTML=rows.map(r=>{
+    tbody.innerHTML=rows.map((r,i)=>{
       const yc=r.yc==null?`<span class="m">n/a</span>`:r.yc<0.995?`<span class="g">$${r.yc.toFixed(3)}</span>`:r.yc>1.005?`<span class="r">$${r.yc.toFixed(3)}</span>`:`$${r.yc.toFixed(3)}`;
       const no=r.no==null?`<span class="m">n/a</span>`:r.no>0.005?`<span class="g">+${r.no.toFixed(3)}</span>`:`${r.no.toFixed(3)}`;
-      return `<tr><td title="${r.t}">${r.t.slice(0,54)}</td><td class="m">${r.c.slice(0,16)}</td><td>${r.n}</td><td>$${r.v.toLocaleString(undefined,{maximumFractionDigits:0})}</td><td>${yc}</td><td>${no}</td></tr>`;
-    }).join("")||`<tr><td colspan="6" class="m">no qualifying books this cycle</td></tr>`;
+      const depth=r.yc!=null&&r.ids&&r.ids.every(Boolean)?`<button class="d" data-i="${i}" style="padding:2px 8px;font-size:12px">check $500</button>`:"";
+      return `<tr><td title="${r.t}">${r.t.slice(0,54)}</td><td class="m">${r.c.slice(0,16)}</td><td>${r.n}</td><td>$${r.v.toLocaleString(undefined,{maximumFractionDigits:0})}</td><td>${yc}</td><td>${no}</td><td id="d${i}" class="m">${depth}</td></tr>`;
+    }).join("")||`<tr><td colspan="7" class="m">no qualifying books this cycle</td></tr>`;
+    document.querySelectorAll("button.d").forEach(b=>b.onclick=async()=>{
+      const r=rows[+b.dataset.i]; b.disabled=true; b.textContent="…";
+      try{
+        // Buy `sh` YES shares on EVERY leg. Exactly one leg pays $1/share -> payoff = sh.
+        // Walk each leg's asks to fill sh; cost = sum filled. Edge = sh - cost.
+        const sh=Math.floor(500/r.yc);
+        let cost=0, ok=true;
+        for(const id of r.ids){
+          const ob=await fetch(`https://clob.polymarket.com/book?token_id=${id}`).then(x=>x.json());
+          const asks=(ob.asks||[]).map(a=>[+a.price,+a.size]).sort((x,y)=>x[0]-y[0]);
+          if(!asks.length){ ok=false; break; }
+          let need=sh, legcost=0;
+          for(const [p,s] of asks){ const take=Math.min(need,s); legcost+=take*p; need-=take; if(need<=0) break; }
+          if(need>0){ ok=false; break; }   // not enough depth at any price
+          cost+=legcost;
+        }
+        b.outerHTML = ok
+          ? (cost<sh?`<span class="g">$${cost.toFixed(0)} → pay $${sh} (+${((sh-cost)/cost*100).toFixed(2)}%)</span>`
+                    :`<span class="r">$${cost.toFixed(0)} vs $${sh}</span>`)
+          : `<span class="m">too thin</span>`;
+      }catch(e){ b.outerHTML=`<span class="m">depth feed blocked</span>`; }
+    });
     $("#ts").textContent=new Date().toISOString().slice(11,19)+" UTC";
     $("#status").textContent=`${rows.length} books`;
   }catch(e){ $("#err").textContent="feed failed: "+e; }
